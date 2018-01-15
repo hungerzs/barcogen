@@ -1,27 +1,28 @@
 package main
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
 	"github.com/boombuler/barcode"
 	"github.com/boombuler/barcode/code128"
 	"github.com/jackmanlabs/errors"
-	"github.com/unidoc/unidoc/pdf/creator"
+	"github.com/jung-kurt/gofpdf"
 	"log"
+	"golang.org/x/image/tiff"
 )
 
 const (
-	PPI            float64 = 72 // Default points per inch
-	PAGE_WIDTH     float64 = PPI * (8 + 1/2)
-	PAGE_HEIGHT    float64 = PPI * (11)
-	BARCODE_HEIGHT float64 = PPI * (0 + 1/2)  // Height of the barcode
-	BARCODE_WIDTH  float64 = PPI * (2)        // Width of the barcode
-	LABEL_HEIGHT   float64 = PPI * (1)        // Height of the label
-	LABEL_MARGIN   float64 = PPI * (0 + 1/8)  // Space between the columns of labels
-	LABEL_PADDING  float64 = PPI * (0 + 1/8)  // Padding between the content and the label edge
-	LABEL_WIDTH    float64 = PPI * (2 + 5/8)  // Width of the label
-	OFFSET_X       float64 = PPI * (0 + 3/16) // Left margin of the label page
-	OFFSET_Y       float64 = PPI * (0 + 1/2)  // Top margin of the label page
+	PAGE_WIDTH     float64 = 8.5
+	PAGE_HEIGHT    float64 = 11.0
+	BARCODE_HEIGHT float64 = 0.5    // Height of the barcode
+	BARCODE_WIDTH  float64 = 2.0    // Width of the barcode
+	LABEL_HEIGHT   float64 = 1.0    // Height of the label
+	LABEL_MARGIN   float64 = 0.125  // Space between the columns of labels
+	LABEL_PADDING  float64 = 0.125  // Padding between the content and the label edge
+	LABEL_WIDTH    float64 = 2.625  // Width of the label
+	OFFSET_X       float64 = 0.1875 // Left margin of the label page
+	OFFSET_Y       float64 = 0.5    // Top margin of the label page
 )
 
 func main() {
@@ -48,21 +49,18 @@ func main() {
 		log.Fatal("The end of the serial number series must be after the beginning.")
 	}
 
-	c := creator.New()
-	c.SetPageSize(creator.PageSize{PAGE_WIDTH, PAGE_HEIGHT})
-	c.SetPageMargins(0, 0, 0, 0)
+	pdf := gofpdf.New("P", "in", "Letter", "")
 
 	for i := *start; i <= *end; i++ {
 
 		// This creates a new page.
 		if (i-*start)%30 == 0 {
 
-			c.NewPage()
+			pdf.AddPage()
 
 			// Draw a lines around labels for debugging
 			var (
 				x1, x2, y1, y2 float64
-				line           creator.Drawable
 			)
 
 			for col := 0.0; col < 3; col++ {
@@ -71,26 +69,23 @@ func main() {
 				x1 = OFFSET_X + col*(LABEL_WIDTH+LABEL_MARGIN)
 				x2 = x1
 				y1 = 0
-				y2 = c.Height()
-				line = creator.NewLine(x1, y1, x2, y2)
-				c.Draw(line)
+				y2 = PAGE_HEIGHT
+				pdf.Line(x1, y1, x2, y2)
 
 				// right edge
 				x1 = OFFSET_X + col*(LABEL_WIDTH+LABEL_MARGIN) + LABEL_WIDTH
 				x2 = x1
 				y1 = 0
-				y2 = c.Height()
-				line = creator.NewLine(x1, y1, x2, y2)
-				c.Draw(line)
+				y2 = PAGE_HEIGHT
+				pdf.Line(x1, y1, x2, y2)
 			}
 
-			for y := OFFSET_Y; y <= c.Height(); y += LABEL_HEIGHT {
+			for y := OFFSET_Y; y <= PAGE_HEIGHT; y += LABEL_HEIGHT {
 				x1 = 0
-				x2 = c.Width()
+				x2 = PAGE_WIDTH
 				y1 = y
 				y2 = y
-				line = creator.NewLine(x1, y1, x2, y2)
-				c.Draw(line)
+				pdf.Line(x1, y1, x2, y2)
 			}
 		}
 
@@ -117,29 +112,24 @@ func main() {
 
 		// The width/height constants don't really mean anything in this context,
 		// but it gives us the right aspect ratio for later.
-		bc, err := barcode.Scale(bc128, int(BARCODE_WIDTH), int(BARCODE_HEIGHT))
+		bc, err := barcode.Scale(bc128, int(BARCODE_WIDTH*72), int(BARCODE_HEIGHT*72))
 		if err != nil {
 			log.Fatal(errors.Stack(err))
 		}
 
-		// Convert the Go-image compatible barcode into a PDF image.
-		img, err := creator.NewImageFromGoImage(bc)
+		bcBuf := bytes.NewBuffer(nil)
+		err = tiff.Encode(bcBuf, bc,&tiff.Options{})
 		if err != nil {
 			log.Fatal(errors.Stack(err))
 		}
 
-		// Scale the image to the desired width.
-		img.ScaleToWidth(BARCODE_WIDTH)
+		bcOptions := gofpdf.ImageOptions{ImageType: "TIF", ReadDpi: true}
+		pdf.RegisterImageOptionsReader(serial, bcOptions, bcBuf)
+		pdf.ImageOptions(serial, x_, y_, BARCODE_WIDTH, BARCODE_HEIGHT, false, bcOptions, 0, "")
 
-		// Finally, draw the image in the proper location.
-		c.MoveTo(x_, y_)
-		err = c.Draw(img)
-		if err != nil {
-			log.Fatal(errors.Stack(err))
-		}
 	}
 
-	err := c.WriteToFile("out.pdf")
+	err := pdf.OutputFileAndClose("out.pdf")
 	if err != nil {
 		log.Fatal(errors.Stack(err))
 	}
